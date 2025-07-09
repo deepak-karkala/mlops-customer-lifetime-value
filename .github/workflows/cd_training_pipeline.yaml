@@ -1,0 +1,74 @@
+# .github/workflows/cd_training_pipeline.yml
+
+name: "CD for ML Training Pipeline"
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'pipelines/**'
+      - 'terraform/**'
+      
+jobs:
+  deploy-and-run-in-staging:
+    runs-on: ubuntu-latest
+    environment: staging # This links to GitHub Environments for managing secrets
+    
+    permissions:
+      id-token: write
+      contents: read
+      
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.9
+
+      - name: Install Python Dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install boto3
+
+      - name: Configure Staging AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.STAGING_AWS_ROLE_ARN }} # Secret stored in GitHub Environment
+          aws-region: eu-west-1
+
+      - name: Deploy SageMaker Pipeline to Staging
+        id: deploy_pipeline
+        run: |
+          echo "Deploying SageMaker Pipeline definition to Staging..."
+          python pipelines/build_pipeline.py \
+            --role-arn ${{ secrets.STAGING_SAGEMAKER_ROLE_ARN }} \
+            --bucket-name ${{ secrets.STAGING_ARTIFACT_BUCKET }}
+      
+      - name: Start SageMaker Pipeline Execution in Staging
+        id: start_execution
+        run: |
+          echo "Starting pipeline execution..."
+          EXECUTION_ARN=$(aws sagemaker start-pipeline-execution \
+            --pipeline-name CLV-Training-Pipeline \
+            --query 'PipelineExecutionArn' \
+            --output text)
+          echo "Pipeline execution started: $EXECUTION_ARN"
+          echo "execution_arn=$EXECUTION_ARN" >> $GITHUB_OUTPUT
+
+      - name: Wait for Pipeline Execution to Complete
+        run: |
+          echo "Waiting for pipeline execution to complete..."
+          aws sagemaker wait pipeline-execution-complete --pipeline-execution-arn ${{ steps.start_execution.outputs.execution_arn }}
+          
+          echo "Checking final status..."
+          STATUS=$(aws sagemaker describe-pipeline-execution --pipeline-execution-arn ${{ steps.start_execution.outputs.execution_arn }} --query 'PipelineExecutionStatus' --output text)
+          
+          if [ "$STATUS" != "Succeeded" ]; then
+            echo "Pipeline execution failed with status: $STATUS"
+            exit 1
+          fi
+          echo "Pipeline execution succeeded!"

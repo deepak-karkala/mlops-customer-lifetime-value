@@ -1,0 +1,71 @@
+# .github/workflows/ci_training_pipeline.yml
+
+name: "CI for ML Training Pipeline"
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'pipelines/**'
+      - 'tests/**'
+      - 'terraform/**'
+      - '.github/workflows/ci_training_pipeline.yml'
+
+jobs:
+  validate-training-pipeline:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      id-token: write  # Required for OIDC AWS authentication
+      contents: read
+      
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.9
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt # Assuming a requirements.txt in the root
+          pip install -r tests/requirements.txt # For test-specific libraries like pytest, moto
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-ci-role # Replace with your IAM role for GitHub Actions
+          aws-region: eu-west-1
+
+      - name: Run Linting and Formatting Checks
+        run: |
+          pip install flake8 black
+          flake8 src/ pipelines/ tests/
+          black --check src/ pipelines/ tests/
+
+      - name: Run Unit Tests
+        run: |
+          pytest tests/unit/
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+
+      - name: Validate Infrastructure as Code (Terraform)
+        run: |
+          cd terraform
+          terraform init -backend=false
+          terraform validate
+          tflint --recursive
+        
+      - name: Validate SageMaker Pipeline Definition
+        run: |
+          # This step runs the pipeline build script.
+          # The script should be designed to build the pipeline object
+          # and perform validations without deploying.
+          # We can add a --dry-run flag to our script for this purpose.
+          python pipelines/build_pipeline.py --role-arn ${{ secrets.SAGEMAKER_EXECUTION_ROLE_ARN }} --bucket-name ${{ secrets.ARTIFACT_BUCKET }} --dry-run
