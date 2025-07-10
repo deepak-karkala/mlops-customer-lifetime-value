@@ -1,0 +1,102 @@
+# .github/workflows/cicd_inference_pipeline.yml
+
+name: "CI/CD for Batch Inference Pipeline"
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/batch_inference.py'
+      - 'pipelines/dag_batch_inference.py'
+      - 'terraform/**' # Now triggers on infrastructure changes as well
+      - 'tests/**'
+      - '.github/workflows/cicd_inference_pipeline.yml'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  ci-checks:
+    name: "Continuous Integration"
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.9
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r tests/requirements.txt
+      
+      - name: Run Linting and Formatting Checks
+        run: |
+          pip install flake8 black
+          flake8 src/ pipelines/ tests/
+          black --check src/ pipelines/ tests/
+
+      - name: Run Unit Tests
+        run: pytest tests/unit/
+  
+  cd-staging:
+    name: "Continuous Delivery to Staging"
+    needs: ci-checks
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging # Links to GitHub secrets for the staging environment
+
+    permissions:
+      id-token: write
+      contents: read
+      
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.9
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        
+      - name: Configure Staging AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.STAGING_AWS_ROLE_ARN }}
+          aws-region: eu-west-1
+
+      - name: Terraform Init (Staging)
+        id: init
+        run: |
+          cd terraform
+          # The -backend-config flag points to a file specifying the S3 bucket/key for staging's state
+          terraform init -backend-config=staging.backend.hcl
+
+      - name: Terraform Apply (Staging)
+        id: apply
+        run: |
+          cd terraform
+          # The -var-file flag points to variables specific to the staging env (e.g., bucket names)
+          terraform apply -auto-approve -var-file=staging.tfvars
+
+      - name: Install Python Test Dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r tests/integration/requirements.txt
+          
+      - name: Deploy DAG to Staging Airflow
+        run: |
+          # This script would sync your DAGs folder with Airflow's DAGs folder in S3
+          echo "Syncing pipelines/dag_batch_inference.py to Staging Airflow..."
+          # Example: aws s3 sync pipelines/ s3://your-staging-airflow-dags-bucket/ --exclude "*" --include "dag_batch_inference.py"
+          
+      - name: Run Integration Test in Staging
+        run: pytest tests/integration/test_inference_pipeline_integration.py
