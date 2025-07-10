@@ -28,8 +28,9 @@ def get_sagemaker_pipeline(role, s3_bucket):
         processor=sklearn_processor,
         inputs=[ProcessingInput(source=f"s3://{s3_bucket}/feature-data/features.csv", destination="/opt/ml/processing/input")],
         outputs=[
-            ProcessingOutput(output_name="train", source="/opt/ml/processing/output/train"),
-            ProcessingOutput(output_name="test", source="/opt/ml/processing/output/test"),
+            ProcessingOutput(output_name="train_scaled", source="/opt/ml/processing/output/train"),
+            ProcessingOutput(output_name="test_scaled", source="/opt/ml/processing/output/test"),
+            ProcessingOutput(output_name="test_unscaled", source="/opt/ml/processing/output/test_unscaled"), # NEW OUTPUT
             ProcessingOutput(output_name="scaler", source="/opt/ml/processing/output/scaler")
         ],
         code="src/preprocess.py"
@@ -61,7 +62,9 @@ def get_sagemaker_pipeline(role, s3_bucket):
         processor=sklearn_processor,
         inputs=[
             ProcessingInput(source=step_train.properties.ModelArtifacts.S3ModelArtifacts, destination="/opt/ml/processing/model"),
-            ProcessingInput(source=step_preprocess.properties.ProcessingOutputConfig.Outputs["test"].S3Output.S3Uri, destination="/opt/ml/processing/test")
+            ProcessingInput(source=step_preprocess.properties.ProcessingOutputConfig.Outputs["test_scaled"].S3Output.S3Uri, destination="/opt/ml/processing/test_scaled"),
+            ProcessingInput(source=step_preprocess.properties.ProcessingOutputConfig.Outputs["test_unscaled"].S3Output.S3Uri, destination="/opt/ml/processing/test_unscaled"), # NEW INPUT
+            # We would also pass train metrics and the regression test set here
         ],
         outputs=[ProcessingOutput(output_name="evaluation", source="/opt/ml/processing/evaluation")],
         code="src/evaluate.py"
@@ -75,16 +78,6 @@ def get_sagemaker_pipeline(role, s3_bucket):
         )
     )
 
-    # Define a condition to check if RMSE is below a threshold
-    cond_lte = ConditionLessThanOrEqualTo(
-        left=JsonGet(
-            step_name=step_evaluate.name,
-            property_file="evaluation.json",
-            json_path="regression_metrics.rmse.value"
-        ),
-        right=250.0  # Your RMSE threshold
-    )
-    
     # Define the registration step
     # First, create a model package
     model = sagemaker.Model(
@@ -100,9 +93,23 @@ def get_sagemaker_pipeline(role, s3_bucket):
         model_package_group_name="CLVModelPackageGroup" # Must be created beforehand
     )
 
+    # The Conditional Registration step can now be more sophisticated
+    cond_rmse = ConditionLessThanOrEqualTo(
+        left=JsonGet(step_name=step_evaluate.name, property_file="evaluation.json", json_path="model_performance.rmse"),
+        right=250.0
+    )
+    cond_gini = ConditionGreaterThanOrEqualTo(
+        left=JsonGet(step_name=step_evaluate.name, property_file="evaluation.json", json_path="model_performance.gini"),
+        right=0.3
+    )
+    cond_fairness = Condition(
+        expression=JsonGet(step_name=step_evaluate.name, property_file="evaluation.json", json_path="fairness_analysis.fairness_threshold_ok"),
+        operator=ConditionOperators.IS_TRUE
+    )
+
     step_conditional_register = ConditionStep(
         name="CheckEvaluationAndRegister",
-        conditions=[cond_lte],
+        conditions=And(expressions=[cond_rmse, cond_gini, cond_fairness]), # Combine multiple conditions
         if_steps=[step_create_model],
         else_steps=[],
     )
