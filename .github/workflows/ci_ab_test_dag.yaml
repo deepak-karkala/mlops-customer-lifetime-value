@@ -1,0 +1,34 @@
+# .github/workflows/ci_ab_test_dag.yml
+
+name: "CI for A/B Test Setup DAG"
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'pipelines/dag_ab_test_setup.py'
+      - '.github/workflows/ci_ab_test_dag.yml'
+
+jobs:
+  validate-ab-test-dag:
+    name: "Validate A/B Test DAG"
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.9
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+      
+      - name: Validate Airflow DAG Integrity
+        run: |
+          # Use the airflow standalone command to check for syntax errors
+          airflow dags list --subset pipelines/dag_ab_test_setup.py

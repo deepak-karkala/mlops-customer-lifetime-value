@@ -1,0 +1,50 @@
+# .github/workflows/cicd_lifecycle_pipelines.yml
+
+name: "CI/CD for Model Lifecycle DAGs"
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      # Add paths to all the new DAGs and any new src files
+      - 'pipelines/dag_automated_retraining.py'
+      - 'pipelines/dag_shadow_deployment.py'
+      - 'pipelines/dag_canary_release.py'
+      - 'pipelines/dag_promote_to_production.py'
+      - '.github/workflows/cicd_lifecycle_pipelines.yml'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  validate-dags:
+    name: "Validate Lifecycle DAGs"
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.9
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r tests/requirements.txt
+      
+      - name: Run Linting Checks
+        run: |
+          pip install flake8
+          # Run flake8 on the new DAG files
+          flake8 pipelines/dag_automated_retraining.py pipelines/dag_shadow_deployment.py ...
+
+      - name: Validate Airflow DAG Integrity
+        run: |
+          # Use the airflow standalone command to check for syntax errors
+          airflow dags list --subset pipelines/dag_automated_retraining.py
+          airflow dags list --subset pipelines/dag_shadow_deployment.py
+          # ... and so on for the other new DAGs

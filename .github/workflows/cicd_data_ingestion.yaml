@@ -1,0 +1,42 @@
+# .github/workflows/cicd_data_ingestion.yml
+name: "CI/CD for Data Ingestion Pipelines"
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/ingest_transactional_data.py'
+      - 'src/produce_behavioral_events.py'
+      - 'pipelines/dag_ingest_transactional.py'
+      - 'terraform/aws_glue.tf'
+      - 'terraform/aws_kinesis.tf'
+      - 'great_expectations/**'
+      - 'tests/**'
+
+jobs:
+  ci-checks:
+    name: "Static Checks and Unit Tests"
+    # ... (linting, unit tests, terraform validate) ...
+  
+  cd-staging-and-test:
+    name: "Deploy to Staging & Run Integration Tests"
+    needs: ci-checks
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - name: Checkout Repository
+        # ...
+      - name: Configure Staging AWS Credentials
+        # ...
+      - name: Deploy Infrastructure (Terraform Apply)
+        run: |
+          cd terraform
+          terraform apply -auto-approve -var-file=staging.tfvars
+      
+      - name: Deploy DAG to Staging Airflow
+        # ...
+        
+      - name: Run Integration Tests
+        run: pytest tests/integration/test_ingestion_pipelines.py
